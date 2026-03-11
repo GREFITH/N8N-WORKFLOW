@@ -1,0 +1,1478 @@
+{
+  "name": "AI Hiring - Historical Outlook Scanner(PRODUCTION)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📧 AI Hiring — Historical Outlook Scanner\n\n**Purpose:** One-time scan of ALL existing Outlook inbox emails with resume attachments. Processes emails that arrived before the real-time Outlook Monitor was set up.\n\n**How to run:** Click 'Execute Workflow' manually.\nScans every email matching resume keywords, skips duplicates, sends new resumes to parser.\n\n**Search filter used:** subject or body contains: resume OR cv OR curriculum\n",
+        "height": 260,
+        "width": 380,
+        "color": 6
+      },
+      "id": "8a1b8669-83e6-4405-809f-72c244cc2a74",
+      "name": "📋 Info",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -896,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## ⚠️ BEFORE RUNNING\n\n1. Replace OUTLOOK_CREDENTIAL_ID in Microsoft Outlook nodes\n2. Resume Parser workflow must be **Active**\n3. Uses `ol_` hash prefix — same as Outlook Monitor\n   → Already-processed emails will be skipped automatically\n4. Duplicate branch loops back to loop node (no Sheets write = no quota hit)\n",
+        "height": 220,
+        "width": 380,
+        "color": 3
+      },
+      "id": "dd61d153-dc96-4da7-81e7-466c6ac4c7cc",
+      "name": "⚠️ Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -336,
+        224
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "097fbfcd-ec08-4b31-8fde-6783431d017c",
+      "name": "▶️ Manual Trigger — Start Historical Outlook Scan",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -464,
+        664
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": true,
+        "options": {
+          "attachmentsPrefix": "attachment_",
+          "downloadAttachments": true
+        }
+      },
+      "id": "f9d480e5-7ce3-4e77-9837-d1d1dce5ac17",
+      "name": "📬 Outlook — Get All Emails with Attachments",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        664
+      ],
+      "webhookId": "1b6622b6-b8dc-46d9-b021-c46f90909bf5",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "aVSaaJt5ECWqa2RZ",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ade11b03-8812-46d8-9415-05160974a04c",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "514095ef-1079-4bbb-b318-b9cdc0c510aa",
+      "name": "🔎 IF — Emails Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -16,
+        664
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "c1583e80-3e29-4234-8e5a-36a0e8ee3013",
+      "name": "🔄 Loop — Process Each Email",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        208,
+        568
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ══════════════════════════════════════════════════════\n// EXTRACT ATTACHMENTS — Historical Outlook Scanner v2.0\n// Outlook getAll (downloadAttachments=ON) provides binary\n// as attachment_0, attachment_1 etc.\n// Binary key preserved as-is so Recover node can read it back.\n// ══════════════════════════════════════════════════════\n\nconst subject    = $json.subject || '';\nconst receivedAt = $json.receivedDateTime || $json.createdDateTime || '';\nconst messageId  = $json.id || '';\n\nconst senderName  = $json.from?.emailAddress?.name    || '';\nconst senderAddr  = $json.from?.emailAddress?.address || '';\nconst sender      = senderName ? `${senderName} <${senderAddr}>` : senderAddr;\nconst senderEmail = senderAddr;\n\nfunction parseFileSize(raw) {\n  if (!raw) return 0;\n  if (typeof raw === 'number') return raw;\n  const s = String(raw).trim();\n  const num = parseFloat(s);\n  if (isNaN(num)) return 0;\n  if (s.match(/gb/i)) return num * 1073741824;\n  if (s.match(/mb/i)) return num * 1048576;\n  if (s.match(/kb/i)) return num * 1024;\n  return num;\n}\n\nconst results = [];\nconst binaryKeys = Object.keys($binary || {}).filter(k => k.startsWith('attachment_'));\n\nif (binaryKeys.length === 0) return [];\n\nfor (const key of binaryKeys) {\n  const att = $binary[key];\n  results.push({\n    json: {\n      filename:        att.fileName || att.name || key,\n      mimeType:        att.mimeType || '',\n      fileSize:        parseFileSize(att.fileSize || att.size || 0),\n      fileSizeRaw:     String(att.fileSize || '0'),\n      messageId,\n      sender,\n      senderEmail,\n      subject,\n      receivedAt,\n      source_type:     'EMAIL_HISTORICAL',\n      source_provider: 'OUTLOOK',\n      binaryKey:       key          // ← store key so Recover node can find it\n    },\n    binary: { data: att }           // ← normalise to 'data' for downstream nodes\n  });\n}\n\nreturn results;\n"
+      },
+      "id": "0ba543c8-b056-45c0-a33c-7444d61372e0",
+      "name": "⚙️ Code — Extract Outlook Attachments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        64
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mimeType }}",
+                    "rightValue": "application/pdf",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "39aeedfb-1c82-435b-89fd-3ac8d885eb41"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "PDF"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mimeType }}",
+                    "rightValue": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "5aa0da2c-78b7-46e7-ac06-0d9082fa61fc"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DOCX"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mimeType }}",
+                    "rightValue": "application/msword",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "e99d67ec-547f-44a1-83f9-7efb91e30989"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "DOC"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.mimeType }}",
+                    "rightValue": "(?i)^image/(jpeg|jpg|png|tiff|bmp|webp)",
+                    "operator": {
+                      "type": "string",
+                      "operation": "regex"
+                    },
+                    "id": "6d32c6ba-48ca-4123-afe4-5bd165f5306c"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "IMAGE"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.filename }}",
+                    "rightValue": "(?i)\\.(pdf|docx|doc)$",
+                    "operator": {
+                      "type": "string",
+                      "operation": "regex"
+                    },
+                    "id": "6cd5756b-f483-455e-a37d-25ef2d264127"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "BY_EXT"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "eb75e8d3-3153-4494-8e3e-4a1ccddebef6",
+      "name": "🔀 Filter — Valid File Type?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        656,
+        16
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "ca904873-a792-4b82-8baa-4498bce3c7eb",
+              "leftValue": "={{ $json.fileSize }}",
+              "rightValue": 20971520,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e18464f9-d6d7-4ca3-b9af-da2846b04455",
+      "name": "📏 IF — File Size Under 20MB?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        -8
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ══════════════════════════════════════════════════════\n// GENERATE FILE HASH — Historical Outlook Scanner\n// Uses SAME djb2 algorithm + ol_ prefix as real-time Outlook Monitor\n// → If real-time monitor already processed this email = DUPLICATE_SKIPPED\n// ══════════════════════════════════════════════════════\n\nfunction djb2Hash(str) {\n  let hash = 5381;\n  for (let i = 0; i < str.length; i++) {\n    hash = ((hash << 5) + hash) + str.charCodeAt(i);\n    hash = hash & hash;\n  }\n  return Math.abs(hash).toString(16);\n}\n\nconst filename  = $json.filename  || 'unknown';\nconst fileSize  = String($json.fileSize  || '0');\nconst mimeType  = $json.mimeType  || '';\nconst sender    = $json.sender    || '';\n\nconst hashInput = `${filename}|${fileSize}|${mimeType}|${sender}`;\nconst fileHash  = 'ol_' + djb2Hash(hashInput) + '_' + fileSize;\n\nreturn [{\n  json: { ...$json, fileHash: fileHash },\n  binary: $binary\n}];\n"
+      },
+      "id": "05a887e4-b424-4e70-ad1a-97f4f8ec2ff9",
+      "name": "🔑 Code — Generate File Hash",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "440a928a-6529-4690-9808-613c55b803d0",
+      "name": "⏱️ Wait — Throttle Sheets Read",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1328,
+        -32
+      ],
+      "webhookId": "3b3b1f08-61c2-4309-ae8f-8a2dbd6eed2d"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1qojh_hX_dn-LqjAXYp8eilE0qbQ2ftp4jhP22uMk-4M",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 73471893,
+          "mode": "list",
+          "cachedResultName": "PROCESSED_FILES",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1qojh_hX_dn-LqjAXYp8eilE0qbQ2ftp4jhP22uMk-4M/edit#gid=73471893"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Hash",
+              "lookupValue": "={{ $json.fileHash }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "59a3ac15-d9a1-42b9-a11f-59a3e93fddc3",
+      "name": "🔍 Sheets — Lookup Hash in PROCESSED_FILES",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1552,
+        -32
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BNByD95JCKVt70BW",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ad8d692a-2491-4f27-9d2b-242762325713",
+              "leftValue": "={{ $json.Hash }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notExists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1fb5f9d4-0d51-40c4-87a2-1fda72785a59",
+      "name": "🔁 IF — Already Processed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1776,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ══════════════════════════════════════════════════════\n// RECOVER BINARY + META BEFORE WEBHOOK\n// Sheets Lookup drops binary. Recover from Hash node.\n// ══════════════════════════════════════════════════════\n\nconst hashItem = $('🔑 Code — Generate File Hash').item;\nconst meta = hashItem.json;\n\nif (!meta || !meta.filename) {\n  throw new Error('Could not retrieve metadata from hash node. Check node name matches exactly.');\n}\n\nconst binary = hashItem.binary || {};\n\nif (Object.keys(binary).length === 0) {\n  throw new Error('No binary found in hash node. Attachment may not have downloaded.');\n}\n\nreturn [{\n  json: {\n    filename:        meta.filename,\n    mimeType:        meta.mimeType,\n    fileSize:        meta.fileSize,\n    sender:          meta.sender,\n    senderEmail:     meta.senderEmail    || '',\n    subject:         meta.subject,\n    receivedAt:      meta.receivedAt,\n    source_type:     meta.source_type     || 'EMAIL_HISTORICAL',\n    source_provider: meta.source_provider || 'OUTLOOK',\n    mailbox:         meta.mailbox         || '',\n    fileHash:        meta.fileHash,\n    messageId:       meta.messageId       || ''\n  },\n  binary: binary\n}];\n"
+      },
+      "id": "76068199-ba1a-4323-8fd1-cf483684af2f",
+      "name": "⚙️ Code — Recover Meta + Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/c2e7760b-4d30-4d8c-878c-f324b711cf32",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Filename",
+              "value": "={{ $json.filename }}"
+            },
+            {
+              "name": "X-MimeType",
+              "value": "={{ $json.mimeType }}"
+            },
+            {
+              "name": "X-FileSize",
+              "value": "={{ $json.fileSize }}"
+            },
+            {
+              "name": "X-Sender",
+              "value": "={{ $json.sender }}"
+            },
+            {
+              "name": "X-Subject",
+              "value": "={{ $json.subject }}"
+            },
+            {
+              "name": "X-ReceivedAt",
+              "value": "={{ $json.receivedAt }}"
+            },
+            {
+              "name": "X-Source-Type",
+              "value": "={{ $json.source_type }}"
+            },
+            {
+              "name": "X-Source-Provider",
+              "value": "={{ $json.source_provider }}"
+            },
+            {
+              "name": "X-File-Hash",
+              "value": "={{ $json.fileHash }}"
+            },
+            {
+              "name": "X-Message-Id",
+              "value": "={{ $json.messageId }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "40ca6b3a-0b9e-4e52-bf63-b286b3f364bb",
+      "name": "🚀 HTTP — Call Resume Parser Webhook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2224,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "b907ca91-2175-4240-9ba8-2ec5d6725e3e",
+      "name": "⏱️ Wait — Throttle Sheets Write",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2448,
+        -128
+      ],
+      "webhookId": "1da0c774-ec85-4e84-843b-a079d37af01c"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1qojh_hX_dn-LqjAXYp8eilE0qbQ2ftp4jhP22uMk-4M",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PROCESSED_FILES",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Hash": "={{ $('⚙️ Code — Recover Meta + Binary').item.json.fileHash }}",
+            "Filename": "={{ $('⚙️ Code — Recover Meta + Binary').item.json.filename }}",
+            "ProcessedAt": "={{ $now.toISO() }}",
+            "SourceType": "={{ $('⚙️ Code — Recover Meta + Binary').item.json.source_type }}",
+            "SourceProvider": "={{ $('⚙️ Code — Recover Meta + Binary').item.json.source_provider }}",
+            "SenderEmail": "={{ $('⚙️ Code — Recover Meta + Binary').item.json.sender }}",
+            "EmailSubject": "={{ $('⚙️ Code — Recover Meta + Binary').item.json.subject }}",
+            "Status": "PROCESSED",
+            "MessageId ": "={{ $('📬 Outlook — Get All Emails with Attachments').item.json.conversationId }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Hash",
+              "displayName": "Hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Filename",
+              "displayName": "Filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ProcessedAt",
+              "displayName": "ProcessedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SourceType",
+              "displayName": "SourceType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SourceProvider",
+              "displayName": "SourceProvider",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SenderEmail",
+              "displayName": "SenderEmail",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "EmailSubject",
+              "displayName": "EmailSubject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "MessageId ",
+              "displayName": "MessageId ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
+      },
+      "id": "fa0f5fd2-a058-475c-8bf4-78d746c8d83c",
+      "name": "✅ Sheets — Mark as Processed",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2672,
+        -128
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BNByD95JCKVt70BW",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1qojh_hX_dn-LqjAXYp8eilE0qbQ2ftp4jhP22uMk-4M",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PROCESSED_FILES",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Hash": "N/A",
+            "Filename": "={{ $json.filename }}",
+            "ProcessedAt": "={{ $now.toISO() }}",
+            "SourceType": "EMAIL_HISTORICAL",
+            "SourceProvider": "OUTLOOK",
+            "SenderEmail": "={{ $json.sender }}",
+            "EmailSubject": "={{ $json.subject }}",
+            "Status": "INVALID_FILE_TYPE",
+            "MessageId": "={{ $json.messageId }}",
+            "FileHash": "N/A"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
+      },
+      "id": "f68e09cf-87fc-4ad7-89e9-6cc3a518ea54",
+      "name": "🚫 Sheets — Log Invalid File Type",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1104,
+        352
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BNByD95JCKVt70BW",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1qojh_hX_dn-LqjAXYp8eilE0qbQ2ftp4jhP22uMk-4M",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PROCESSED_FILES",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Hash": "N/A",
+            "Filename": "={{ $json.filename }}",
+            "ProcessedAt": "={{ $now.toISO() }}",
+            "SourceType": "EMAIL_HISTORICAL",
+            "SourceProvider": "OUTLOOK",
+            "SenderEmail": "={{ $json.sender }}",
+            "EmailSubject": "={{ $json.subject }}",
+            "Status": "FILE_TOO_LARGE",
+            "MessageId": "={{ $json.messageId }}",
+            "FileHash": "N/A"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
+      },
+      "id": "2f10145d-b5e4-42be-8fc3-0995156d693f",
+      "name": "🚫 Sheets — Log File Too Large",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1328,
+        160
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BNByD95JCKVt70BW",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    ScanID:          'HIST_OUTLOOK_' + Date.now(),\n    ScanCompletedAt: new Date().toISOString(),\n    TriggeredBy:     'MANUAL',\n    Source:          'OUTLOOK_HISTORICAL',\n    Notes:           'Historical Outlook scan completed. Check PROCESSED_FILES for results.'\n  }\n}];"
+      },
+      "id": "c599c22b-849b-4c0c-9575-0b768dda7dae",
+      "name": "⚙️ Code — Build Scan Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1qojh_hX_dn-LqjAXYp8eilE0qbQ2ftp4jhP22uMk-4M",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 937167333,
+          "mode": "list",
+          "cachedResultName": "LOGS",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1qojh_hX_dn-LqjAXYp8eilE0qbQ2ftp4jhP22uMk-4M/edit#gid=937167333"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ScanID": "={{ $json.ScanID }}",
+            "ScanCompletedAt": "={{ $json.ScanCompletedAt }}",
+            "TriggeredBy": "={{ $json.TriggeredBy }}",
+            "Notes": "={{ $json.Notes }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "ScanID",
+              "displayName": "ScanID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ScanCompletedAt",
+              "displayName": "ScanCompletedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "TriggeredBy",
+              "displayName": "TriggeredBy",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Notes",
+              "displayName": "Notes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
+      },
+      "id": "e5091eb6-daf0-48ba-a512-4fc766c04afc",
+      "name": "📊 Sheets — Log Scan Complete",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        656,
+        -176
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BNByD95JCKVt70BW",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "id": "f3b91ee5-ec21-41e4-9df7-f01391a7f99e",
+      "name": "⏱️ Wait — Loop Cooling",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2896,
+        160
+      ],
+      "webhookId": "f3ca975e-b9d3-491d-865c-e1c1a2118c8f"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1qojh_hX_dn-LqjAXYp8eilE0qbQ2ftp4jhP22uMk-4M",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PROCESSED_FILES",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Hash": "={{ $('🔑 Code — Generate File Hash').item.json.fileHash }}",
+            "Filename": "={{ $('🔑 Code — Generate File Hash').item.json.filename }}",
+            "ProcessedAt": "={{ $now.toISO() }}",
+            "SourceType": "EMAIL_NEW",
+            "SourceProvider": "GMAIL",
+            "SenderEmail": "={{ $('🔑 Code — Generate File Hash').item.json.sender }}",
+            "EmailSubject": "={{ $('🔑 Code — Generate File Hash').item.json.subject }}",
+            "Status": "DUPLICATE_SKIPPED",
+            "MessageId ": "={{ $('🔑 Code — Generate File Hash').item.json.messageId }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Hash",
+              "displayName": "Hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Filename",
+              "displayName": "Filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ProcessedAt",
+              "displayName": "ProcessedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SourceType",
+              "displayName": "SourceType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SourceProvider",
+              "displayName": "SourceProvider",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SenderEmail",
+              "displayName": "SenderEmail",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "EmailSubject",
+              "displayName": "EmailSubject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "MessageId ",
+              "displayName": "MessageId ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2224,
+        160
+      ],
+      "id": "dbf308ae-5869-4960-9582-41478c0dd245",
+      "name": "⚠️ Sheets — Log Duplicate Skipped",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BNByD95JCKVt70BW",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1104,
+        160
+      ],
+      "id": "c7fc725c-d897-4f13-b777-594e5646964c",
+      "name": "Wait",
+      "webhookId": "90599e9d-9656-4b84-a234-eda5b59d9001"
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        352
+      ],
+      "id": "27d37b13-f3f8-45d2-91ee-4447932da6f3",
+      "name": "Wait1",
+      "webhookId": "becee109-73b6-4294-bb8e-f5c20eda9c69"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1qojh_hX_dn-LqjAXYp8eilE0qbQ2ftp4jhP22uMk-4M",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "PROCESSED_FILES",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Hash": "N/A",
+            "Filename": "={{ $json.filename }}",
+            "ProcessedAt": "={{ $now.toISO() }}",
+            "SourceType": "EMAIL_HISTORICAL",
+            "SourceProvider": "OUTLOOK",
+            "SenderEmail": "={{ $json.sender }}",
+            "EmailSubject": "={{ $json.subject }}",
+            "Status": "INVALID_FILE_TYPE"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Hash",
+              "displayName": "Hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Filename",
+              "displayName": "Filename",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ProcessedAt",
+              "displayName": "ProcessedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SourceType",
+              "displayName": "SourceType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SourceProvider",
+              "displayName": "SourceProvider",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SenderEmail",
+              "displayName": "SenderEmail",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "EmailSubject",
+              "displayName": "EmailSubject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "MessageId ",
+              "displayName": "MessageId ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
+      },
+      "id": "f374d5af-56ba-4ba3-a079-4e56bc6a6ff5",
+      "name": "🚫 Sheets — Log Invalid File Type1",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        208,
+        760
+      ],
+      "retryOnFail": true,
+      "maxTries": 5,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "BNByD95JCKVt70BW",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2000,
+        160
+      ],
+      "id": "9b54ba8a-8f96-45f1-ad1d-d96b03ff57bc",
+      "name": "Wait2",
+      "webhookId": "2e29601b-56ef-48ca-8a1c-b04b412cd0c6"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "▶️ Manual Trigger — Start Historical Outlook Scan": {
+      "main": [
+        [
+          {
+            "node": "📬 Outlook — Get All Emails with Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📬 Outlook — Get All Emails with Attachments": {
+      "main": [
+        [
+          {
+            "node": "🔎 IF — Emails Found?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔎 IF — Emails Found?": {
+      "main": [
+        [
+          {
+            "node": "🔄 Loop — Process Each Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "🚫 Sheets — Log Invalid File Type1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔄 Loop — Process Each Email": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Code — Build Scan Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "⚙️ Code — Extract Outlook Attachments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Code — Extract Outlook Attachments": {
+      "main": [
+        [
+          {
+            "node": "🔀 Filter — Valid File Type?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔀 Filter — Valid File Type?": {
+      "main": [
+        [
+          {
+            "node": "📏 IF — File Size Under 20MB?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📏 IF — File Size Under 20MB?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📏 IF — File Size Under 20MB?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📏 IF — File Size Under 20MB?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📏 IF — File Size Under 20MB?": {
+      "main": [
+        [
+          {
+            "node": "🔑 Code — Generate File Hash",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔑 Code — Generate File Hash": {
+      "main": [
+        [
+          {
+            "node": "⏱️ Wait — Throttle Sheets Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏱️ Wait — Throttle Sheets Read": {
+      "main": [
+        [
+          {
+            "node": "🔍 Sheets — Lookup Hash in PROCESSED_FILES",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔍 Sheets — Lookup Hash in PROCESSED_FILES": {
+      "main": [
+        [
+          {
+            "node": "🔁 IF — Already Processed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔁 IF — Already Processed?": {
+      "main": [
+        [
+          {
+            "node": "⚙️ Code — Recover Meta + Binary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Code — Recover Meta + Binary": {
+      "main": [
+        [
+          {
+            "node": "🚀 HTTP — Call Resume Parser Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚀 HTTP — Call Resume Parser Webhook": {
+      "main": [
+        [
+          {
+            "node": "⏱️ Wait — Throttle Sheets Write",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏱️ Wait — Throttle Sheets Write": {
+      "main": [
+        [
+          {
+            "node": "✅ Sheets — Mark as Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "✅ Sheets — Mark as Processed": {
+      "main": [
+        [
+          {
+            "node": "⏱️ Wait — Loop Cooling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚫 Sheets — Log Invalid File Type": {
+      "main": [
+        [
+          {
+            "node": "🔄 Loop — Process Each Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚫 Sheets — Log File Too Large": {
+      "main": [
+        [
+          {
+            "node": "🔄 Loop — Process Each Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚙️ Code — Build Scan Summary": {
+      "main": [
+        [
+          {
+            "node": "📊 Sheets — Log Scan Complete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏱️ Wait — Loop Cooling": {
+      "main": [
+        [
+          {
+            "node": "🔄 Loop — Process Each Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "🚫 Sheets — Log File Too Large",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait1": {
+      "main": [
+        [
+          {
+            "node": "🚫 Sheets — Log Invalid File Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⚠️ Sheets — Log Duplicate Skipped": {
+      "main": [
+        [
+          {
+            "node": "🔄 Loop — Process Each Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait2": {
+      "main": [
+        [
+          {
+            "node": "⚠️ Sheets — Log Duplicate Skipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "93155e14-c1c0-4b7a-bbb3-43711c6e5bb4",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "9bc8d31ca7fefa3da73b2e8f5ebdb06b277b4f992a856dd2ff5ec5e2e1d5989e"
+  },
+  "id": "mOC6bOvfnPKlXt1Y",
+  "tags": []
+}

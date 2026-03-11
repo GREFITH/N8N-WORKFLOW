@@ -1,0 +1,29 @@
+# ══════════════════════════════════════════════════════
+# AI Hiring System — .gitignore
+# ══════════════════════════════════════════════════════
+
+# ── NEVER commit these ────────────────────────────────
+.env
+.env.local
+.env.*
+secrets.json
+credentials.json
+
+# Raw workflow exports WITH real credentials/IDs
+# Always use the scrubbed versions in /workflows/
+*_raw.json
+*_private.json
+*_with_keys.json
+
+# ── OS / Editor junk ──────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.log
+
+# ── Node (if you add any scripts later) ───────────────
+node_modules/
+npm-debug.log*
